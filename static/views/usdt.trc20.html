@@ -26,8 +26,7 @@
         <h1 class="amount parse-amount" data-clipboard-text="{{.amount}}" id="usdt">
           {{.amount}} <span>USDT</span>
         </h1>
-        <label>Top Up Network: &nbsp;&nbsp;&nbsp; <b>TRC20</b><br/></label>
-        <label>Double-check the top up network and amount to avoid losing money!</label>
+        <label>Network: &nbsp; &nbsp;&nbsp;&nbsp; <b>Tron(TRC20)</b></label>
     </div>
     <div class="content">
         <div class="section">
@@ -49,23 +48,16 @@
                     </li>
                 </ul>
             </div>
-            <div class="title">
-              <h1>
-                <span>Scan the QR code or copy the wallet address and amount to transfer</span>
-              </h1>
+            <div style="color:#999;margin-bottom:18px;">
+                Scan the QR code OR<br/> Copy the address and amount to transfer
             </div>
-            <div class="address parse-action" data-clipboard-text="{{.address}}" id="address">
+            <div class="address parse-action" style="font-size:14px;line-height:28px;background-color:#ccc;" data-clipboard-text="{{.address}}" id="address">
                 {{.address}}
             </div>
-            <div class="title">
-              <h1>
-                <span>"The payment amount must be <b style="color: red">{{.amount}}</b>. Please pay in the countdown"</span>
-              </h1>
+            <div style="color:#666;">
+                The payment amount must be <b style="color: red">{{.amount}} TRC20</b><br/> Please pay in the countdown
             </div>
         </div>
-    </div>
-    <div class="footer">
-        <p></p>
     </div>
 </div>
 <script>
@@ -83,7 +75,7 @@
 
         if (seconds <= 0) {
             //return layer.alert("支付超时，请重新发起支付！", {icon: 5});
-            return layer.alert("Payment has timed out. Please try making the payment again!", {icon: 5});
+            return layer.alert("Payment timed out. Please try to pay again!", {icon: 5});
         }
 
         $('.hours').text(hour.toString().padStart(2, '0'));
@@ -112,7 +104,7 @@
                 if (data.status === 3) {
 
                     //return layer.alert("支付超时，请重新发起支付！", {icon: 5, title: "❌ 支付超时"});
-                    return layer.alert("Payment has timed out. Please try making the payment again!", {icon: 5, title: "❌ Payment timed out"});
+                    return layer.alert("Payment timed out. Please try to pay again!", {icon: 5, title: "❌ Payment timed out"});
                 }
             }
         });
@@ -121,8 +113,8 @@
     $(function () {
         $('#qrcode').qrcode({
             text: "{{.address}}",
-            width: 230,
-            height: 230,
+            width: 180,
+            height: 180,
             foreground: "#000000",
             background: "#ffffff",
             typeNumber: -1
