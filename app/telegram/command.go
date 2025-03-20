@@ -19,10 +19,10 @@ const cmdOrder = "order"
 
 const replayAddressText = "🚚 请发送一个合法的钱包地址"
 
-func cmdGetIdHandle(_msg *tgbotapi.Message) {
-	msg := tgbotapi.NewMessage(_msg.Chat.ID, "您的ID: "+fmt.Sprintf("`%v`(点击复制)", _msg.Chat.ID))
-	msg.ParseMode = tgbotapi.ModeMarkdown
-	msg.ReplyToMessageID = _msg.MessageID
+func cmdGetIdHandle(m *tgbotapi.Message) {
+	msg := tgbotapi.NewMessage(m.Chat.ID, "您的ID: "+fmt.Sprintf("`%v`(点击复制)", m.Chat.ID))
+	msg.ParseMode = tgbotapi.ModeMarkdownV2
+	msg.ReplyToMessageID = m.MessageID
 	_, _ = botApi.Send(msg)
 }
 
@@ -32,12 +32,12 @@ func cmdStartHandle() {
 	var inlineBtn [][]tgbotapi.InlineKeyboardButton
 	if model.DB.Find(&was).Error == nil {
 		for _, wa := range was {
-			var _address = fmt.Sprintf("[✅已启用] %s", wa.Address)
+			var text = fmt.Sprintf("[✅已启用] %s", help.MaskAddress(wa.Address))
 			if wa.Status == model.StatusDisable {
-				_address = fmt.Sprintf("[❌已禁用] %s", wa.Address)
+				text = fmt.Sprintf("[❌已禁用] %s", help.MaskAddress(wa.Address))
 			}
 
-			inlineBtn = append(inlineBtn, tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData(_address, fmt.Sprintf("%s|%v", cbAddress, wa.ID))))
+			inlineBtn = append(inlineBtn, tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData(text, fmt.Sprintf("%s|%v", cbAddress, wa.ID))))
 		}
 	}
 
@@ -111,24 +111,16 @@ func cmdWalletHandle() {
 }
 
 func cmdOrderHandle() {
-	var msg = tgbotapi.NewMessage(0, "*下面是最近的8个订单，点击可查看详细信息*\n```\n🟢 收款成功 🔴 交易过期 🟡 等待支付\n```")
+	var msg = tgbotapi.NewMessage(0, "*下面是最近的8个订单，点击可查看详细信息*\n```\n🟢 收款成功 🔴 交易过期 \n🟡 等待支付 ⚪️ 订单取消\n```")
 	msg.ParseMode = tgbotapi.ModeMarkdown
 
 	var orders []model.TradeOrders
 	var inlineBtn [][]tgbotapi.InlineKeyboardButton
 	if model.DB.Order("id desc").Limit(8).Find(&orders).Error == nil {
-		for _, order := range orders {
-			var _state = "🟢"
-			if order.Status == model.OrderStatusExpired {
-				_state = "🔴"
-			}
-			if order.Status == model.OrderStatusWaiting {
-				_state = "🟡"
-			}
-
+		for _, o := range orders {
 			inlineBtn = append(inlineBtn, tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData(
-				fmt.Sprintf("%s %s 💰%.2f", _state, order.OrderId, order.Money),
-				fmt.Sprintf("%s|%v", cbOrderDetail, order.TradeId),
+				fmt.Sprintf("%s %s 💰%.2f", o.GetStatusEmoji(), o.OrderId, o.Money),
+				fmt.Sprintf("%s|%v", cbOrderDetail, o.TradeId),
 			)))
 		}
 	}

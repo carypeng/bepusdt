@@ -1,21 +1,15 @@
-package monitor
+package task
 
 import (
 	"bytes"
 	"context"
 	"encoding/hex"
-	"fmt"
 	"github.com/btcsuite/btcd/btcutil/base58"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/shopspring/decimal"
-	"github.com/spf13/cast"
 	"github.com/v03413/bepusdt/app/config"
-	"github.com/v03413/bepusdt/app/help"
 	"github.com/v03413/bepusdt/app/log"
 	"github.com/v03413/bepusdt/app/model"
-	"github.com/v03413/bepusdt/app/notify"
-	"github.com/v03413/bepusdt/app/telegram"
 	"github.com/v03413/tronprotocol/api"
 	"github.com/v03413/tronprotocol/core"
 	"google.golang.org/grpc"
@@ -27,7 +21,7 @@ import (
 	"time"
 )
 
-// 交易所在区块高度和当前区块高度差值超过20，说明此交易已经被网络确认
+// 暂且认为交易所在区块高度和当前区块高度差值超过20，说明此交易已经被网络确认
 const blockHeightNumConfirmedSub = 20
 
 // usdt trc20 contract address 41a614f803b6fd780986a42c78ec9c7f77e6ded13c TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t
@@ -35,36 +29,17 @@ var usdtTrc20ContractAddress = []byte{0x41, 0xa6, 0x14, 0xf8, 0x03, 0xb6, 0xfd, 
 
 var currentBlockHeight int64
 
-type resource struct {
-	ID           string
-	Type         core.Transaction_Contract_ContractType
-	Balance      int64
-	FromAddress  string
-	RecvAddress  string
-	Timestamp    time.Time
-	ResourceCode core.ResourceCode
-}
-
-type transfer struct {
-	ID          string
-	Amount      float64
-	FromAddress string
-	RecvAddress string
-	Timestamp   time.Time
-	TradeType   string
-}
-
 type usdtTrc20TransferRaw struct {
 	RecvAddress string
 	Amount      float64
 }
 
 func init() {
-	RegisterSchedule(time.Second*3, BlockScanStart)
+	RegisterSchedule(time.Second*3, tronBlockScan)
 }
 
-// BlockScanStart 区块扫描
-func BlockScanStart(duration time.Duration) {
+// tronBlockScan 区块扫描
+func tronBlockScan(duration time.Duration) {
 	var node = config.GetTronGrpcNode()
 	log.Info("区块扫描启动：", node)
 
@@ -97,22 +72,27 @@ func BlockScanStart(duration time.Duration) {
 
 		atomic.AddUint64(&config.BlockScanSucc, 1)
 
+		var nowBlockHeight = nowBlock.BlockHeader.RawData.Number
+		if config.GetTradeConfirmed() {
+			nowBlockHeight = nowBlockHeight - blockHeightNumConfirmedSub
+		}
+
 		if currentBlockHeight == 0 { // 初始化当前区块高度
 
-			currentBlockHeight = nowBlock.BlockHeader.RawData.Number - 1
+			currentBlockHeight = nowBlockHeight - 1
 		}
 
 		// 连续区块
-		var sub = nowBlock.BlockHeader.RawData.Number - currentBlockHeight
+		var sub = nowBlockHeight - currentBlockHeight
 		if sub == 1 {
-			parseBlockTrans(nowBlock, nowBlock.BlockHeader.RawData.Number)
+			parseBlockTrans(nowBlock, nowBlockHeight)
 
 			continue
 		}
 
 		// 如果当前区块高度和上次扫描的区块高度差值超过1，说明存在区块丢失
+		var endBlockHeight = nowBlockHeight
 		var startBlockHeight = currentBlockHeight + 1
-		var endBlockHeight = nowBlock.BlockHeader.RawData.Number
 
 		// 扫描丢失的区块
 		var ctx2, cancel2 = context.WithTimeout(context.Background(), time.Second*3)
@@ -197,12 +177,13 @@ func parseBlockTrans(block *api.BlockExtention, nowHeight int64) {
 				}
 
 				transfers = append(transfers, transfer{
-					ID:          id,
+					TxHash:      id,
 					Amount:      float64(foo.Amount),
 					FromAddress: base58CheckEncode(foo.OwnerAddress),
 					RecvAddress: base58CheckEncode(foo.ToAddress),
 					Timestamp:   timestamp,
 					TradeType:   model.OrderTradeTypeTronTrx,
+					BlockNum:    nowHeight,
 				})
 
 				continue
@@ -217,7 +198,7 @@ func parseBlockTrans(block *api.BlockExtention, nowHeight int64) {
 					continue
 				}
 
-				var transItem = transfer{Timestamp: timestamp, ID: id, FromAddress: base58CheckEncode(foo.OwnerAddress)}
+				var transItem = transfer{Timestamp: timestamp, TxHash: id, FromAddress: base58CheckEncode(foo.OwnerAddress)}
 				var reader = bytes.NewReader(foo.GetData())
 				if !bytes.Equal(foo.GetContractAddress(), usdtTrc20ContractAddress) { // usdt trc20 contract
 
@@ -234,6 +215,7 @@ func parseBlockTrans(block *api.BlockExtention, nowHeight int64) {
 				transItem.TradeType = model.OrderTradeTypeUsdtTrc20
 				transItem.Amount = trc20Contract.Amount
 				transItem.RecvAddress = trc20Contract.RecvAddress
+				transItem.BlockNum = nowHeight
 
 				transfers = append(transfers, transItem)
 			}
@@ -241,11 +223,11 @@ func parseBlockTrans(block *api.BlockExtention, nowHeight int64) {
 	}
 
 	if len(transfers) > 0 {
-		handleOtherNotify(handleOrderTransaction(block.GetBlockHeader().GetRawData().GetNumber(), nowHeight, transfers))
+		transferQueue.In <- transfers
 	}
 
 	if len(resources) > 0 {
-		handleResourceNotify(resources)
+		resourceQueue.In <- resources
 	}
 
 	log.Info("区块扫描完成", nowHeight, "TRON")
@@ -288,204 +270,6 @@ func parseUsdtTrc20Contract(reader *bytes.Reader) usdtTrc20TransferRaw {
 	return usdtTrc20TransferRaw{RecvAddress: toAddress, Amount: float64(amount)}
 }
 
-// handleOrderTransaction 处理支付交易
-func handleOrderTransaction(refBlockNum, nowHeight int64, transfers []transfer) []transfer {
-	var orders = getAllWaitingOrders()
-	var notOrderTransfers []transfer
-
-	for _, t := range transfers {
-		// 计算交易金额
-		var amount, quant = parseTransAmount(t.Amount)
-
-		// 判断金额是否在允许范围内
-		if !inPaymentAmountRange(amount) {
-
-			continue
-		}
-
-		// 判断是否存在对应订单
-		order, isOrder := orders[fmt.Sprintf("%s%v%s", t.RecvAddress, quant, t.TradeType)]
-		if !isOrder {
-			notOrderTransfers = append(notOrderTransfers, t)
-
-			continue
-		}
-
-		// 判断时间是否在有效期内
-		if t.Timestamp.Unix() < order.CreatedAt.Unix() || t.Timestamp.Unix() > order.ExpiredAt.Unix() {
-			// 已失效
-
-			continue
-		}
-
-		// 更新订单交易信息
-		order.OrderUpdateTxInfo(refBlockNum, t.FromAddress, t.ID, t.Timestamp)
-	}
-
-	for _, order := range orders {
-		if order.RefBlockNum == 0 || order.TradeHash == "" {
-
-			continue
-		}
-
-		// 判断交易是否需要被确认
-		var confirmedSub int64 = 0
-		if config.GetTradeConfirmed() {
-
-			confirmedSub = blockHeightNumConfirmedSub
-		}
-
-		if nowHeight-order.RefBlockNum <= confirmedSub {
-
-			continue
-		}
-
-		order.MarkSuccess()
-
-		go notify.Handle(order)             // 通知订单支付成功
-		go telegram.SendTradeSuccMsg(order) // TG发送订单信息
-	}
-
-	return notOrderTransfers
-}
-
-// handleOtherNotify 处理其他通知
-func handleOtherNotify(items []transfer) {
-	var ads []model.WalletAddress
-	var tx = model.DB.Where("status = ? and other_notify = ?", model.StatusEnable, model.OtherNotifyEnable).Find(&ads)
-	if tx.RowsAffected <= 0 {
-
-		return
-	}
-
-	for _, wa := range ads {
-		for _, trans := range items {
-			if trans.RecvAddress != wa.Address && trans.FromAddress != wa.Address {
-
-				continue
-			}
-
-			var amount, quant = parseTransAmount(trans.Amount)
-			var detailUrl = "https://tronscan.org/#/transaction/" + trans.ID
-			if !inPaymentAmountRange(amount) {
-
-				continue
-			}
-
-			if !model.IsNeedNotifyByTxid(trans.ID) {
-
-				continue
-			}
-
-			var title = "收入"
-			if trans.RecvAddress != wa.Address {
-				title = "支出"
-			}
-
-			var transferUnit = "USDT.TRC20"
-			var transferType = "USDT"
-			if trans.TradeType == model.OrderTradeTypeTronTrx {
-				transferUnit = "TRX"
-				transferType = "TRX"
-			}
-
-			var text = fmt.Sprintf(
-				"#账户%s #非订单交易 #"+transferType+"\n---\n```\n💲交易数额：%v "+transferUnit+"\n⏱️交易时间：%v\n✅接收地址：%v\n🅾️发送地址：%v```\n",
-				title,
-				quant,
-				trans.Timestamp.Format(time.DateTime),
-				help.MaskAddress(trans.RecvAddress),
-				help.MaskAddress(trans.FromAddress),
-			)
-
-			var chatId, err = strconv.ParseInt(config.GetTgBotNotifyTarget(), 10, 64)
-			if err != nil {
-
-				continue
-			}
-
-			var msg = tgbotapi.NewMessage(chatId, text)
-			msg.ParseMode = tgbotapi.ModeMarkdown
-			msg.ReplyMarkup = tgbotapi.InlineKeyboardMarkup{
-				InlineKeyboard: [][]tgbotapi.InlineKeyboardButton{
-					{
-						tgbotapi.NewInlineKeyboardButtonURL("📝查看交易明细", detailUrl),
-					},
-				},
-			}
-
-			var _record = model.NotifyRecord{Txid: trans.ID}
-			model.DB.Create(&_record)
-
-			go telegram.SendMsg(msg)
-		}
-	}
-}
-
-// handleResourceNotify 处理资源通知
-func handleResourceNotify(items []resource) {
-	var ads []model.WalletAddress
-	var tx = model.DB.Where("status = ? and other_notify = ?", model.StatusEnable, model.OtherNotifyEnable).Find(&ads)
-	if tx.RowsAffected <= 0 {
-
-		return
-	}
-
-	for _, wa := range ads {
-		for _, trans := range items {
-			if trans.RecvAddress != wa.Address && trans.FromAddress != wa.Address {
-
-				continue
-			}
-
-			if trans.ResourceCode != core.ResourceCode_ENERGY {
-
-				continue
-			}
-
-			var detailUrl = "https://tronscan.org/#/transaction/" + trans.ID
-			if !model.IsNeedNotifyByTxid(trans.ID) {
-				// 不需要额外通知
-
-				continue
-			}
-
-			var title = "代理"
-			if trans.Type == core.Transaction_Contract_UnDelegateResourceContract {
-				title = "回收"
-			}
-
-			var text = fmt.Sprintf(
-				"#资源动态 #能量"+title+"\n---\n```\n🔋质押数量："+cast.ToString(trans.Balance/1000000)+"\n⏱️交易时间：%v\n✅操作地址：%v\n🅾️资源来源：%v```\n",
-				trans.Timestamp.Format(time.DateTime),
-				help.MaskAddress(trans.RecvAddress),
-				help.MaskAddress(trans.FromAddress),
-			)
-
-			var chatId, err = strconv.ParseInt(config.GetTgBotNotifyTarget(), 10, 64)
-			if err != nil {
-
-				continue
-			}
-
-			var msg = tgbotapi.NewMessage(chatId, text)
-			msg.ParseMode = tgbotapi.ModeMarkdown
-			msg.ReplyMarkup = tgbotapi.InlineKeyboardMarkup{
-				InlineKeyboard: [][]tgbotapi.InlineKeyboardButton{
-					{
-						tgbotapi.NewInlineKeyboardButtonURL("📝查看交易明细", detailUrl),
-					},
-				},
-			}
-
-			var _record = model.NotifyRecord{Txid: trans.ID}
-			model.DB.Create(&_record)
-
-			go telegram.SendMsg(msg)
-		}
-	}
-}
-
 func base58CheckEncode(input []byte) string {
 	checksum := chainhash.DoubleHashB(input)
 	checksum = checksum[:4]
@@ -518,8 +302,8 @@ func getAllWaitingOrders() map[string]model.TradeOrders {
 }
 
 // 解析交易金额
-func parseTransAmount(amount float64) (decimal.Decimal, string) {
+func parseTransAmount(amount float64) decimal.Decimal {
 	var result = decimal.NewFromFloat(amount).Div(decimal.NewFromFloat(1000000))
 
-	return result, result.String()
+	return result
 }
