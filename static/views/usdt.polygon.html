@@ -23,21 +23,15 @@
         <div class="icon">
             <img class="logo" src="/img/tether.svg" alt="logo">
         </div>
-        <h1>{{.http_host}}</h1>
-        <label>
-            请扫描二维码或点击金额和地址粘贴转账USDT(Polygon)支付。<br>
-            <b style="color: red">转账金额必须为下方显示的金额且需要在倒计时内完成转账，否则无法被系统确认！</b>
-        </label>
+        <h1 class="amount parse-amount" data-clipboard-text="{{.amount}}" id="usdt">
+          {{.amount}} <span>USDT</span>
+        </h1>
+        <label>Network: &nbsp; &nbsp;&nbsp;&nbsp; <b>POLYGON</b></label>
     </div>
     <div class="content">
         <div class="section">
-            <div class="title">
-                <h1 class="amount parse-amount" data-clipboard-text="{{.amount}}" id="usdt">
-                    {{.amount}} <span>USDT.POLYGON</span>
-                </h1>
-            </div>
-            <div class="address parse-action" data-clipboard-text="{{.address}}" id="address">
-                {{.address}}
+            <div style="color:#999;margin-bottom:10px;">
+                Scan the QR code
             </div>
             <div class="main">
                 <div class="qr-image" id="qrcode"></div>
@@ -46,24 +40,27 @@
                 <ul class="downcount">
                     <li>
                         <span class="hours">00</span>
-                        <p class="hours_ref">时</p>
                     </li>
                     <li class="seperator">:</li>
                     <li>
                         <span class="minutes">00</span>
-                        <p class="minutes_ref">分</p>
                     </li>
                     <li class="seperator">:</li>
                     <li>
                         <span class="seconds">00</span>
-                        <p class="seconds_ref">秒</p>
                     </li>
                 </ul>
             </div>
+            <div style="color:#999;margin-bottom:8px;">
+                OR Copy the address and amount to transfer
+            </div>
+            <div class="address parse-action" style="font-size:14px;line-height:28px;background-color:#ccc;" data-clipboard-text="{{.address}}" id="address">
+                {{.address}}
+            </div>
+            <div style="color:#666;">
+                The payment amount must be <b style="color: red">{{.amount}} (Polygon)</b><br/> Please pay in the countdown
+            </div>
         </div>
-    </div>
-    <div class="footer">
-        <p></p>
     </div>
 </div>
 <script>
@@ -80,7 +77,8 @@
         let hour = Math.floor(minute / 60);
 
         if (seconds <= 0) {
-            return layer.alert("支付超时，请重新发起支付！", {icon: 5});
+            //return layer.alert("支付超时，请重新发起支付！", {icon: 5});
+            return layer.alert("Payment timed out. Please try to pay again!", {icon: 5});
         }
 
         $('.hours').text(hour.toString().padStart(2, '0'));
@@ -101,13 +99,15 @@
                     return setTimeout(checkStatus, 5000);
                 }
                 if (data.status === 2) {  // 支付成功
-                    layer.msg('支付成功，正在跳转中...', {icon: 16, shade: 0.01, time: 20000});
+                    //layer.msg('支付成功，正在跳转中...', {icon: 16, shade: 0.01, time: 20000});
+                    layer.msg('Payment successful! Redirecting ...', {icon: 16, shade: 0.01, time: 20000});
 
                     return window.location.href = data.return_url;
                 }
                 if (data.status === 3) {
 
-                    return layer.alert("支付超时，请重新发起支付！", {icon: 5, title: "❌ 支付超时"});
+                    //return layer.alert("支付超时，请重新发起支付！", {icon: 5, title: "❌ 支付超时"});
+                    return layer.alert("Payment timed out. Please try to pay again!", {icon: 5, title: "❌ Payment timed out"});
                 }
             }
         });
@@ -116,18 +116,20 @@
     $(function () {
         $('#qrcode').qrcode({
             text: "{{.address}}",
-            width: 230,
-            height: 230,
+            width: 180,
+            height: 180,
             foreground: "#000000",
             background: "#ffffff",
             typeNumber: -1
         });
 
         (new ClipboardJS('#usdt')).on('success', function (e) {
-            return layer.msg('金额复制成功');
+            //return layer.msg('金额复制成功');
+            return layer.msg('Amount copied!');
         });
         (new ClipboardJS('#address')).on('success', function (e) {
-            layer.msg('地址复制成功');
+            //layer.msg('地址复制成功');
+            layer.msg('Wallet address copied!');
         });
 
         setTimeout(clock, 1000);
